@@ -13,7 +13,7 @@ def new_id(prefix: str) -> str:
 
 
 class Database:
-    def __init__(self, path: Path, migrations_dir: Path | None = None, default_model: str = "grok-4.3") -> None:
+    def __init__(self, path: Path, migrations_dir: Path | None = None, default_model: str = "gpt-5.6") -> None:
         self.path = path
         self.migrations_dir = migrations_dir or Path(__file__).parents[2] / "migrations"
         self.default_model = default_model

@@ -6,7 +6,7 @@ test("opens the seeded coworker shell and navigates its POC surfaces", async ({ 
     const body = path === "/api/users"
       ? [{ id: "user_alice", name: "Alice" }, { id: "user_bob", name: "Bob" }]
       : path.endsWith("/agents")
-        ? [{ id: "agent_alice_kyc", user_id: "user_alice", name: "KYC Research Agent", instructions: "Research public companies.", model: "grok-4.3", permission_mode: "ask", kind: "kyc" }]
+        ? [{ id: "agent_alice_kyc", user_id: "user_alice", name: "KYC Research Agent", instructions: "Research public companies.", model: "gpt-5.6", permission_mode: "ask", kind: "kyc" }]
         : path.endsWith("/thread")
           ? { thread_id: "thread_alice_kyc", messages: [], active_run: null, pending_approval: null, cursor: 0 }
           : [];

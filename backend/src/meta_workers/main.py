@@ -16,11 +16,10 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from fastapi.staticfiles import StaticFiles
 
 from .config import Settings
 from .db import Database, new_id
-from .runtime import AgentRunner, OpenAICompatibleModel
+from .runtime import AgentRunner, OpenAIModel
 from .schemas import (
     AgentCreate,
     AgentOut,
@@ -66,17 +65,18 @@ async def lifespan(app: FastAPI):
         "UPDATE runs SET status = 'unknown', error = 'Application restarted during execution', updated_at = CURRENT_TIMESTAMP, completed_at = CURRENT_TIMESTAMP WHERE status = 'running'"
     )
     sandbox = SandboxManager(settings)
-    model = OpenAICompatibleModel(settings)
+    model = OpenAIModel(settings)
     app.state.settings = settings
     app.state.db = db
     app.state.sandbox = sandbox
     app.state.runner = AgentRunner(settings, db, model, sandbox)
     app.state.run_tasks = {}
+    app.state.maintenance_stop = asyncio.Event()
     app.state.maintenance = asyncio.create_task(maintenance_loop(app))
     for row in await db.fetchall("SELECT id FROM runs WHERE status = 'queued'"):
         schedule_run(app, row["id"])
     yield
-    app.state.maintenance.cancel()
+    app.state.maintenance_stop.set()
     await asyncio.gather(app.state.maintenance, return_exceptions=True)
     for task in app.state.run_tasks.values():
         task.cancel()
@@ -134,9 +134,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     register_routes(app)
-    static_dir = Path(os.getenv("WEB_DIST", "web/dist")).resolve()
-    if static_dir.exists():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="web")
     return app
 
 
@@ -145,7 +142,7 @@ def register_routes(app: FastAPI) -> None:
     async def health(request: Request):
         db_ready = bool(await request.app.state.db.fetchone("SELECT 1 AS ok"))
         docker_ready = await request.app.state.sandbox.healthy()
-        configured = bool(request.app.state.settings.model_api_key)
+        configured = bool(request.app.state.settings.openai_api_key)
         return {
             "status": "ok" if db_ready else "degraded",
             "database": db_ready,
@@ -604,13 +601,16 @@ async def insert_tool_denial(db: Database, run: dict[str, Any], tool_call_id: st
 
 
 async def maintenance_loop(app: FastAPI) -> None:
-    while True:
+    while not app.state.maintenance_stop.is_set():
         try:
             await run_due_routines(app)
             await cleanup(app)
         except Exception as error:
             log_event("maintenance.failed", error=str(error)[:500])
-        await asyncio.sleep(30)
+        try:
+            await asyncio.wait_for(app.state.maintenance_stop.wait(), 30)
+        except TimeoutError:
+            pass
 
 
 async def run_due_routines(app: FastAPI) -> None:

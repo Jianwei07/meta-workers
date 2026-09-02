@@ -13,10 +13,9 @@ from meta_workers.main import create_app
 def client(tmp_path) -> Iterator[TestClient]:
     settings = Settings(
         data_dir=tmp_path,
-        model_base_url="https://example.invalid/v1",
-        model_api_key="",
-        default_model="grok-4.3",
-        allowed_models=("grok-4.3",),
+        openai_api_key="",
+        default_model="gpt-5.6",
+        allowed_models=("gpt-5.6",),
         sandbox_image="meta-workers-sandbox:test",
         artifact_ttl_days=30,
     )

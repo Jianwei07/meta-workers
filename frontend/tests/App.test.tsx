@@ -9,7 +9,7 @@ vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     : url.endsWith("/artifacts") || url.endsWith("/memories") || url.endsWith("/routines")
       ? []
     : url.endsWith("/agents")
-      ? [{ id: "agent_alice_kyc", user_id: "user_alice", name: "KYC Research Agent", instructions: "Research public companies.", model: "grok-4.3", permission_mode: "ask", kind: "kyc" }]
+      ? [{ id: "agent_alice_kyc", user_id: "user_alice", name: "KYC Research Agent", instructions: "Research public companies.", model: "gpt-5.6", permission_mode: "ask", kind: "kyc" }]
       : { thread_id: "thread_alice_kyc", messages: [], active_run: null, pending_approval: null, cursor: 0 };
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }));

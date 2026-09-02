@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from openai import AsyncOpenAI
@@ -19,53 +19,61 @@ DeltaCallback = Callable[[str], Awaitable[None]]
 class ModelTurn:
     content: str
     tool_calls: list[dict[str, Any]]
+    response_items: list[dict[str, Any]] = field(default_factory=list)
 
 
-class OpenAICompatibleModel:
+def response_text_delta(event: Any) -> str:
+    return event.delta if getattr(event, "type", "") in {"response.output_text.delta", "response.refusal.delta"} else ""
+
+
+def response_output_item(event: Any) -> tuple[int, dict[str, Any]] | None:
+    if getattr(event, "type", "") != "response.output_item.done":
+        return None
+    item = event.item
+    if hasattr(item, "model_dump"):
+        item = item.model_dump(mode="json", exclude_none=True)
+    return event.output_index, item
+
+
+def function_calls(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in items if item.get("type") == "function_call"]
+
+
+class OpenAIModel:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         # The UI must boot before credentials are configured; stream_turn blocks real calls below.
-        self.client = AsyncOpenAI(api_key=settings.model_api_key or "not-configured", base_url=settings.model_base_url)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key or "not-configured")
 
     async def stream_turn(
         self,
         model: str,
-        messages: list[dict[str, Any]],
+        items: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         on_delta: DeltaCallback,
     ) -> ModelTurn:
-        if not self.settings.model_api_key:
-            content = "Model access is not configured. Set MODEL_API_KEY to run this coworker."
+        if not self.settings.openai_api_key:
+            content = "Model access is not configured. Set OPENAI_API_KEY to run this coworker."
             await on_delta(content)
             return ModelTurn(content, [])
-        stream = await self.client.chat.completions.create(
+        stream = await self.client.responses.create(
             model=model,
-            messages=messages,
+            input=items,
             tools=tools,
             stream=True,
+            store=False,
+            include=["reasoning.encrypted_content"],
         )
         content_parts: list[str] = []
-        calls: dict[int, dict[str, Any]] = {}
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if delta.content:
-                content_parts.append(delta.content)
-                await on_delta(delta.content)
-            for call in delta.tool_calls or []:
-                current = calls.setdefault(
-                    call.index,
-                    {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-                )
-                if call.id:
-                    current["id"] = call.id
-                if call.function:
-                    if call.function.name:
-                        current["function"]["name"] += call.function.name
-                    if call.function.arguments:
-                        current["function"]["arguments"] += call.function.arguments
-        return ModelTurn("".join(content_parts), [calls[index] for index in sorted(calls)])
+        output_items: dict[int, dict[str, Any]] = {}
+        async for event in stream:
+            if delta := response_text_delta(event):
+                content_parts.append(delta)
+                await on_delta(delta)
+            if output := response_output_item(event):
+                output_items[output[0]] = output[1]
+        response_items = [output_items[index] for index in sorted(output_items)]
+        return ModelTurn("".join(content_parts), function_calls(response_items), response_items)
 
 
 class AgentRunner:
@@ -75,7 +83,7 @@ class AgentRunner:
         self,
         settings: Settings,
         db: Database,
-        model: OpenAICompatibleModel,
+        model: OpenAIModel,
         sandbox: SandboxManager,
     ) -> None:
         self.settings = settings
@@ -157,7 +165,8 @@ class AgentRunner:
                     assistant_id,
                     "assistant",
                     turn.content,
-                    tool_calls=turn.tool_calls or None,
+                    tool_calls=turn.tool_calls if turn.tool_calls and not turn.response_items else None,
+                    response_items=turn.response_items or None,
                 )
                 if not turn.tool_calls:
                     await self.db.execute(
@@ -167,14 +176,14 @@ class AgentRunner:
                     await self.event(run, "run.completed", {"message_id": assistant_id})
                     return
                 for call in turn.tool_calls:
-                    name = call.get("function", {}).get("name", "")
+                    name = call.get("name", "")
                     definition = self.tools.get(name)
-                    arguments_text = call.get("function", {}).get("arguments", "{}")
+                    arguments_text = call.get("arguments", "{}")
                     try:
                         arguments = json.loads(arguments_text)
                     except json.JSONDecodeError:
                         arguments = {"_invalid_json": arguments_text}
-                    tool_id = call.get("id") or new_id("tool")
+                    tool_id = call.get("call_id") or call.get("id") or new_id("tool")
                     await self.db.execute(
                         """
                         INSERT INTO tool_calls(id, user_id, run_id, name, arguments_json, risk, status)
@@ -294,17 +303,35 @@ class AgentRunner:
                 f"- {item['name']}: {item['description']}" for item in skills
             )
         rows = await self.db.fetchall(
-            "SELECT role, content, tool_calls_json, tool_call_id FROM messages WHERE thread_id = ? ORDER BY seq",
+            "SELECT role, content, tool_calls_json, tool_call_id, response_items_json FROM messages WHERE thread_id = ? ORDER BY seq",
             (run["thread_id"],),
         )
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        messages: list[dict[str, Any]] = [{"role": "developer", "content": system}]
         for row in rows:
-            message: dict[str, Any] = {"role": row["role"], "content": row["content"]}
-            if row["tool_calls_json"]:
-                message["tool_calls"] = json.loads(row["tool_calls_json"])
-            if row["tool_call_id"]:
-                message["tool_call_id"] = row["tool_call_id"]
-            messages.append(message)
+            if row["role"] == "user":
+                messages.append({"role": "user", "content": row["content"]})
+            elif row["role"] == "tool":
+                messages.append(
+                    {"type": "function_call_output", "call_id": row["tool_call_id"], "output": row["content"]}
+                )
+            elif row["response_items_json"]:
+                messages.extend(json.loads(row["response_items_json"]))
+            else:
+                if row["content"]:
+                    messages.append({"role": "assistant", "content": row["content"]})
+                for call in json.loads(row["tool_calls_json"] or "[]"):
+                    if call.get("type") == "function_call":
+                        messages.append(call)
+                        continue
+                    function = call.get("function", {})
+                    messages.append(
+                        {
+                            "type": "function_call",
+                            "call_id": call.get("id", ""),
+                            "name": function.get("name", ""),
+                            "arguments": function.get("arguments", "{}"),
+                        }
+                    )
         return messages
 
     async def insert_message(
@@ -316,6 +343,7 @@ class AgentRunner:
         *,
         tool_calls: list[dict[str, Any]] | None = None,
         tool_call_id: str | None = None,
+        response_items: list[dict[str, Any]] | None = None,
     ) -> None:
         connection = await self.db.connect()
         try:
@@ -326,8 +354,8 @@ class AgentRunner:
             seq = (await cursor.fetchone())[0]
             await connection.execute(
                 """
-                INSERT INTO messages(id, user_id, thread_id, run_id, seq, role, content, tool_calls_json, tool_call_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO messages(id, user_id, thread_id, run_id, seq, role, content, tool_calls_json, tool_call_id, response_items_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id,
@@ -339,6 +367,7 @@ class AgentRunner:
                     content,
                     json.dumps(tool_calls) if tool_calls else None,
                     tool_call_id,
+                    json.dumps(response_items) if response_items else None,
                 ),
             )
             await connection.commit()

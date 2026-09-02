@@ -1,3 +1,4 @@
+import sqlite3
 import time
 from collections.abc import Callable
 from typing import Any
@@ -19,7 +20,13 @@ def wait_for(check: Callable[[], Any], timeout: float = 2) -> Any:
 class FinalModel:
     async def stream_turn(self, model, messages, tools, on_delta):
         await on_delta("Research ready.")
-        return ModelTurn("Research ready.", [])
+        return ModelTurn("Research ready.", [], [{
+            "type": "message",
+            "id": "msg_test",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Research ready.", "annotations": []}],
+        }])
 
 
 def test_run_persists_and_duplicate_nonce_returns_same_run(client: TestClient):
@@ -32,3 +39,8 @@ def test_run_persists_and_duplicate_nonce_returns_same_run(client: TestClient):
     assert first.status_code == 202 and duplicate.json()["id"] == run_id
     messages = client.get("/api/users/user_alice/agents/agent_alice_kyc/thread").json()["messages"]
     assert [message["role"] for message in messages] == ["user", "assistant"]
+    with sqlite3.connect(client.app.state.settings.database_path) as connection:
+        stored = connection.execute(
+            "SELECT response_items_json FROM messages WHERE role = 'assistant'"
+        ).fetchone()[0]
+    assert '"id": "msg_test"' in stored

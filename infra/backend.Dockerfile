@@ -1,20 +1,11 @@
-FROM node:24-slim AS web
-WORKDIR /app/web
-RUN corepack enable
-COPY web/package.json web/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
-COPY web/ ./
-RUN pnpm build
-
 FROM python:3.14-slim
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
+COPY backend/pyproject.toml backend/uv.lock ./
 RUN pip install --no-cache-dir uv==0.9.13 \
     && uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
     && pip install --no-cache-dir -r /tmp/requirements.txt
-COPY src/ src/
-COPY migrations/ migrations/
-COPY --from=web /app/web/dist web/dist
+COPY backend/src/ src/
+COPY backend/migrations/ migrations/
 RUN pip install --no-cache-dir --no-deps .
 RUN playwright install --with-deps chromium
 ENV DATA_DIR=/data

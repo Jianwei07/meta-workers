@@ -14,11 +14,13 @@ class ApprovalModel:
     async def stream_turn(self, model, messages, tools, on_delta):
         if not self.called:
             self.called = True
-            return ModelTurn("", [{
-                "id": "tool_write",
-                "type": "function",
-                "function": {"name": "write_file", "arguments": '{"path":"notes.txt","content":"done"}'},
-            }])
+            call = {
+                "call_id": "tool_write",
+                "type": "function_call",
+                "name": "write_file",
+                "arguments": '{"path":"notes.txt","content":"done"}',
+            }
+            return ModelTurn("", [call], [call])
         return ModelTurn("File written.", [])
 
 

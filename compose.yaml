@@ -1,22 +1,25 @@
 services:
   sandbox-image:
-    build: ./sandbox
+    build:
+      context: .
+      dockerfile: infra/sandbox.Dockerfile
     image: meta-workers-sandbox:local
     command: ["true"]
 
-  app:
-    build: .
+  backend:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
     depends_on:
       sandbox-image:
         condition: service_completed_successfully
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       DATA_DIR: /data
-      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.x.ai/v1}
-      MODEL_API_KEY: ${MODEL_API_KEY:-}
-      MODEL_DEFAULT: ${MODEL_DEFAULT:-grok-4.3}
-      MODEL_ALLOWLIST: ${MODEL_ALLOWLIST:-grok-4.3}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
+      OPENAI_MODEL_ALLOWLIST: ${OPENAI_MODEL_ALLOWLIST:-gpt-5.6}
       SANDBOX_IMAGE: meta-workers-sandbox:local
     volumes:
       - meta-workers-data:/data
@@ -26,6 +29,17 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/frontend.Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:80"
     restart: unless-stopped
 
 volumes:
