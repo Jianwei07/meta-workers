@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meta-workers"
+version = "0.1.0"
+description = "Trusted self-hosted AI coworkers"
+requires-python = ">=3.14"
+dependencies = [
+  "aiosqlite>=0.21,<1",
+  "croniter>=6,<7",
+  "ddgs>=9,<10",
+  "docker>=7,<8",
+  "fastapi>=0.141,<0.142",
+  "openai>=2,<3",
+  "playwright>=1.62,<2",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8,<9",
+  "pytest-asyncio>=1,<2",
+]
+
+[project.scripts]
+meta-workers = "meta_workers.main:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

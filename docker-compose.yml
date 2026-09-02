@@ -1,0 +1,32 @@
+services:
+  sandbox-image:
+    build: ./sandbox
+    image: meta-workers-sandbox:local
+    command: ["true"]
+
+  app:
+    build: .
+    depends_on:
+      sandbox-image:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    environment:
+      DATA_DIR: /data
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://api.x.ai/v1}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_DEFAULT: ${MODEL_DEFAULT:-grok-4.3}
+      MODEL_ALLOWLIST: ${MODEL_ALLOWLIST:-grok-4.3}
+      SANDBOX_IMAGE: meta-workers-sandbox:local
+    volumes:
+      - meta-workers-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  meta-workers-data:
